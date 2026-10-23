@@ -1,7 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+
+const execFileAsync = promisify(execFile);
 
 export const assert = (ok, message) => { if (!ok) throw new Error(message); };
 export const json = async file => JSON.parse(await fs.readFile(file, 'utf8'));
@@ -50,10 +55,20 @@ export function difference(a, b) {
 export const writePNG = (file, data, size) => sharp(data, { raw: { width: size, height: size, channels: 4 } }).png().toFile(file);
 
 export async function sharedPalette(frames, size, colours) {
-  const stack = Buffer.concat(frames);
-  const png = await sharp(stack, { raw: { width: size, height: size * frames.length, channels: 4 } }).png({ palette: true, colours, dither: 0, effort: 10 }).toBuffer();
-  const raw = await sharp(png).ensureAlpha().raw().toBuffer();
-  return frames.map((_, i) => binaryAlpha(raw.subarray(i * size * size * 4, (i + 1) * size * size * 4)));
+  // Sharp's PNG colour option rounds up to a legal bit depth (48 can become
+  // 256 entries). Quantise the complete stack once with an explicit limit.
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'chibi-palette-'));
+  try {
+    const input = path.join(dir, 'stack.png'), output = path.join(dir, 'quantised.png');
+    await sharp(Buffer.concat(frames), { raw: { width: size, height: size * frames.length, channels: 4 } }).png().toFile(input);
+    await execFileAsync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-n', '-i', input, '-filter_complex', `[0:v]split[a][b];[a]palettegen=max_colors=${colours}:reserve_transparent=1:stats_mode=full[p];[b][p]paletteuse=dither=none:alpha_threshold=128`, '-frames:v', '1', output]);
+    const { data: raw } = await readRGBA(output);
+    const result = frames.map((_, i) => binaryAlpha(raw.subarray(i * size * size * 4, (i + 1) * size * size * 4)));
+    assert(paletteCount(result) <= colours, 'Shared palette quantisation exceeded its colour limit');
+    return result;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
 export function paletteCount(frames) {
   const colours = new Set();

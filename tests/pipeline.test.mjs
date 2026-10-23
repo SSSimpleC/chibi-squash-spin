@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
 import { prepare, render, validate } from '../scripts/spin.mjs';
-import { loadConfig, nearestTransform, readRGBA, paletteCount, REVIEW_CHECKS, json } from '../scripts/core.mjs';
+import { loadConfig, nearestTransform, readRGBA, paletteCount, sharedPalette, REVIEW_CHECKS, json } from '../scripts/core.mjs';
 
 async function fixture(dir, count=24, options={}){
   const keys=[];
@@ -37,6 +37,22 @@ test('uneven or duplicate angle labels fail before rendering',async t=>{
 test('nearest transforms preserve the source colour set and hard alpha',()=>{
   const a=Buffer.alloc(8*8*4);for(let y=2;y<7;y++)for(let x=2;x<6;x++){const p=(y*8+x)*4;a[p]=200;a[p+1]=60;a[p+3]=255;}
   const b=nearestTransform(a,8,8,16,4,7,1.5,.7,8,14);assert.equal(paletteCount([b]),1);for(let p=3;p<b.length;p+=4)assert.ok(b[p]===0||b[p]===255);
+});
+test('rich source frames honour arbitrary shared palette limits and preserve alpha masks',async()=>{
+  const size=32,frames=Array.from({length:3},(_,i)=>{
+    const frame=Buffer.alloc(size*size*4);
+    for(let y=2;y<size-2;y++)for(let x=2;x<size-2;x++){
+      const p=(y*size+x)*4;frame[p]=(x*9+i*31)%256;frame[p+1]=(y*11+i*17)%256;frame[p+2]=(x*y+i*47)%256;frame[p+3]=255;
+    }
+    frame.set([200,30,180,255],(10*size+10)*4);return frame;
+  });
+  assert.ok(paletteCount(frames)>256);
+  for(const limit of [8,17,48,96,128]){
+    const result=await sharedPalette(frames,size,limit);
+    assert.ok(paletteCount(result)<=limit,`requested ${limit}, got ${paletteCount(result)}`);
+    for(let i=0;i<frames.length;i++)for(let p=3;p<frames[i].length;p+=4)assert.equal(result[i][p],frames[i][p]);
+    const p=(10*size+10)*4;for(const frame of result)assert.deepEqual(frame.subarray(p,p+4),result[0].subarray(p,p+4));
+  }
 });
 test('duplicate pictures with different angle labels are rejected',async t=>{
   const d=await temp(t,'chibi-v2-duplicate-'),f=await fixture(d),c=await json(f);for(const k of c.keyframes)k.file='pose-0.png';await fs.writeFile(f,JSON.stringify(c));
