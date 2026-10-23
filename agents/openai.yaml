@@ -1,0 +1,4 @@
+interface:
+  display_name: "Q版坐姿弹转 GIF"
+  short_description: "根据人物设定图制作稳定转轴、强Q弹、无缝循环的双规格透明GIF"
+  default_prompt: "使用 $chibi-squash-spin，把这张人物设定图制作成Q版坐姿、Q弹旋转的透明GIF，同时导出256×256和512×512两个规格。"

@@ -1,0 +1,10 @@
+{
+  "name": "chibi-squash-spin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A Codex skill and deterministic tools for seated chibi squash-and-stretch spin GIFs.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test tests/*.test.mjs" },
+  "dependencies": { "sharp": "0.35.5" }
+}
