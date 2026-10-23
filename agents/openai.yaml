@@ -1,4 +1,4 @@
 interface:
-  display_name: "Q版坐姿弹转 GIF"
-  short_description: "根据人物设定图制作稳定转轴、强Q弹、无缝循环的双规格透明GIF"
-  default_prompt: "使用 $chibi-squash-spin，把这张人物设定图制作成Q版坐姿、Q弹旋转的透明GIF，同时导出256×256和512×512两个规格。"
+  display_name: "朋友的酒 · 欧耶耶弹转 GIF"
+  short_description: "制作《朋友的酒（DJ版）》欧耶耶梗的Q版坐姿弹转表情包，导出256和512双规格"
+  default_prompt: "使用 $chibi-squash-spin，把这张人物设定图做成《朋友的酒（DJ版）》“欧耶耶！开心比什么都贵”梗的Q版坐姿弹转GIF，同时导出256×256和512×512两个规格。"
