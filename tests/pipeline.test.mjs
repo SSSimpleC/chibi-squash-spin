@@ -52,6 +52,7 @@ test('frame plan has 24 evenly spaced targets, midpoint brackets and wrap, with 
     if(i%2){assert.equal(f.bracket.length,2);assert.equal(f.bracket[0],p.frames[i-1].frame);assert.equal(f.bracket[1],p.frames[(i+1)%24].frame);}
   }
   assert.deepEqual(p.frames[23].bracket,['F23','F01']);assert.equal(p.frames[23].next,'F01');
+  assert.equal(p.frames[6].nearerCharacterSide,'own-left');assert.equal(p.frames[18].nearerCharacterSide,'own-right');assert.equal(p.frames[12].nearerCharacterSide,'front-or-back');
   const extrema=p.frames.filter(f=>Math.abs(f.scaleY-2/3)<1e-12);assert.deepEqual(extrema.map(f=>f.index),[6,18]);
   assert.ok(p.frames[23].scaleY<1);assert.ok(Math.abs((p.frames[0].scaleY-p.frames[23].scaleY)-(p.frames[0].scaleY-p.frames[1].scaleY))<1e-12);
 });

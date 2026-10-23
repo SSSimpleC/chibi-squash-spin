@@ -27,7 +27,7 @@ export function framePlan() {
     '30°与60°之间；远侧眼、肩与胸饰的投影继续收窄',
     '前侧深角；仍是侧面之前，不能复制90°正侧面',
     '60°与90°之间；比60°更侧，比90°保留更多前脸/前胸可见区域',
-    '正侧面，鼻尖朝画面左；头与胸共用侧向，远侧肢体按遮挡隐藏',
+    '正侧面，鼻尖朝画面左；人物自身左侧较近，头与胸共用侧向，远侧按遮挡隐藏',
     '90°与120°之间；前脸/前胸开始被遮住，不能仍停在正侧面',
     '后侧浅角；背部份额增加，脸与前胸继续消失',
     '120°与150°之间；近侧身体与背部的遮挡逐渐交替',
@@ -39,7 +39,7 @@ export function framePlan() {
     '210°与240°之间；朝画面右的侧向继续打开',
     '另一后侧浅角；向正侧面接近，但不能提前到270°',
     '240°与270°之间；头与身体比240°更接近正侧面，仍保留后侧遮挡',
-    '另一正侧面，鼻尖朝画面右；不能镜像90°来交换固有配饰',
+    '另一正侧面，鼻尖朝画面右；人物自身右侧较近，不能镜像90°交换固有配饰',
     '270°与300°之间；前脸/前胸开始打开，不能仍是正侧面',
     '另一前侧深角；前脸与前胸份额继续增加',
     '300°与330°之间；远侧眼/肩逐渐显露，不突然跳成正面',
@@ -55,6 +55,7 @@ export function framePlan() {
     frames: views.map((cue,i) => ({
       index:i, frame:userFrame(i), file:`frame-${String(i).padStart(4,'0')}.png`, targetYaw:i*15,
       role:i%2?'inbetween':'anchor', previous:userFrame((i+23)%24), next:userFrame((i+1)%24),
+      nearerCharacterSide:i===0||i===12?'front-or-back':i<12?'own-left':'own-right',
       bracket:i%2?[userFrame(i-1),userFrame((i+1)%24)]:null,
       cue, ...squashAt(i), delayMs:80
     }))

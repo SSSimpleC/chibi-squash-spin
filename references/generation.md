@@ -6,7 +6,7 @@
 
 查看原设定和已接受的正面坐姿。若后者已经合格，直接复用，不能因为修旋转重新设计比例、神态或画风。比例示例只提供二头身/姿势，不能提供身份。
 
-`character-contract.json` 简短记录：眼型/眼睑/眉嘴/情绪、头发色块与分缕、衣服色块、饰品数量与人物自身左右、短脚与髋侧双手、推断的背面设计、母版路径及实际检查结果。区分人物左/右与画面左/右，不能在背面将大、小饰品换边。长发按固定发束形状随身体旋转，不另做飘动。
+`character-contract.json` 简短记录：眼型/眼睑/眉嘴/情绪、头发色块与分缕、衣服色块、饰品数量与人物自身左右、短脚与髋侧双手、推断的背面设计、母版路径及实际检查结果。依据standard中的左右表再写 `sideConvention`：0→180半圈自身左侧较近，180→360半圈自身右侧较近。不能把画面左等同于自身左，不能在背面将大、小饰品换边。长发按固定发束形状随身体旋转，不另做飘动。
 
 新角色尚无母版时，用以下提示并替换方括号；已有合格母版跳过：
 
@@ -33,6 +33,7 @@
 > Image 1 is the approved character/style master. Image 2 is earlier endpoint A [angle/view]; Image 3 is later endpoint B [angle/view]. Keep their exact compact seated character, expression, outfit, short feet and hands beside hips.
 > Draw ONLY the missing midpoint M at [target] between A and B. The camera does not move. The whole seated head and torso turn together toward [screen direction], with the same height, skull size, axis and baseline. M must be visibly distinct from BOTH endpoints, halfway in turn progress; do not copy either endpoint or snap to a generic three-quarter/profile/back pose.
 > Relative to A: [specific head geometry/occlusion change] AND [specific shoulder/chest/hand/hem projection change]. Relative to B: [what is still less turned/less occluded in M]. [Fixed asymmetric accessory's own-side and gradual occlusion]. These are changes in viewing direction, not hair movement, expression changes or redesigned clothing.
+> Near side is the character's OWN [left/right], which is not the screen direction of the nose. [Named near accessory] stays on that side; [named far accessory] stays behind the skull as appropriate, never relocates beside the near accessory just to remain visible.
 > Lock the master's pixel clusters, palette, restrained expression and silhouette design. No squash/stretch/bounce, no blinking or new pose, no mirror flip, no new accessories. Deliberate 144px-readable 2D pixel art, full transparent silhouette, no text/grid/background/shadow. Return ONE full character.
 
 对近侧面：看脸颊宽度、鼻眼遮挡、前胸变窄与肩袖转向；不要要求任何发型都必须出现“第二只眼”。对近背面：看后脑/侧头、侧袖/手/裙摆与固定发饰的遮挡；胸被长发挡住时不能要求画出不存在的胸饰。目标是保持人物，不是人为加标记来证明转身。
@@ -46,5 +47,9 @@
 - 登记后144图：微小转向是否仍可见；源图有区别但缩小后相同，仍需修原画。
 
 复制端点：只重画M，明确它与被复制端点之间缺少的头部和身体投影变化。中间帧越界或倒退：先复查A/B是否本身错误，再修M。两次同类提示无改善，缩小修补范围、修错误端点、减少无关引用或改写观察到的具体差异；不能默认重做母版、切3D路线或改帧数掩盖。
+
+端点若标为provisional/needs-repair，只能用于明确标注的局部方法试验，不能进入合格主序列；其错误遮挡会污染后面的补画。修好端点后重看或重画依赖它的中间帧。试用中收到他人纠正时，记录纠正前后阶段，不将受指导的全部结果称为完全独立验证。
+
+若一个端点本身可疑，不继续把它夹进所有调用；可用较近的合格二维方向图作主要修改参考、母版仅锁身份，明确要求从该方向只推进一小步，再与另一端比较。这是修补策略，不是保证有效的替代流程；仍须通过同样检查，不能因为更接近背面就判定目标角正确。
 
 背景错误用图片生成修透明；裁切只处理实际边界，保留独立配饰像素，禁止删除白色当去背景。禁止镜像补半圈、复制朝向、跨帧混合、光流/TPS融化或把扭曲端点当新朝向。后处理只负责登记、像素映射、共享色板和通过后的Q弹。
