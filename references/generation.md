@@ -18,7 +18,18 @@
 
 ## 完整中性旋转序列提示词
 
-优先 6 列 × 4 行的 24 帧整圈。角度是绘制目标，并非生成结果自动具有正确角度。相机固定，旋转的是同一个坐着的人偶；0 为正面，90 为一个侧面，180 为背面，270 为另一侧，345 回到近正面。选择一个方向后保持整圈一致。
+默认分四个六帧小区间，每组使用 3 列 × 2 行，沿用同一正面母版，并附已正确的相邻边界帧。角度是绘制目标，并非生成结果自动具有正确角度。相机固定，旋转的是同一个坐着的人偶；0 为正面，90 为一个侧面，180 为背面，270 为另一侧，345 回到近正面。选择一个方向后保持整圈一致。
+
+| 区间 | 方向目标 | 不能提前到达的朝向 |
+| --- | --- | --- |
+| A：0、15、30、45、60、75 | 正面逐步转到近侧面 | 60、75 不能都成为 90 的完整侧面 |
+| B：90、105、120、135、150、165 | 真侧面逐步转到近背面 | 150、165 不能都成为 180 的正背面 |
+| C：180、195、210、225、240、255 | 正背面逐步转到另一侧的近侧面 | 240、255 不能提前画成 270 的完整侧面 |
+| D：270、285、300、315、330、345 | 真侧面逐步转回近正面 | 330、345 不能提前画成 0 的完全正面 |
+
+把下方整圈提示中的网格和角度替换为当前小组，并明确前后端的遮挡差异。组间不要重复起止朝向。遇到进度不均匀，引用前后正确帧重画 2–4 张中间姿态。眼睛／脸颊的显露程度、胸前图案的投影、左右配饰的遮挡应共同渐进；仅头发摆动或轮廓不同，不足以证明真正转向。
+
+以下为整圈角度与身份约束的完整提示模板，也可用于一次性整圈尝试；整张有 24 格不等于有 24 个有效方向。
 
 > Make a complete 24-frame PIXEL-ART turntable sprite sheet of the EXACT same approved seated chibi model. Six equal columns, four equal rows, row-major chronological order. Frame yaw targets: row 1 [0,15,30,45,60,75]; row 2 [90,105,120,135,150,165]; row 3 [180,195,210,225,240,255]; row 4 [270,285,300,315,330,345]. Each adjacent frame advances a small equal yaw step; do not repeat a direction. Last frame is almost front so it wraps naturally to frame 0. Maintain the same large head, short tucked feet, both hands hanging at hips, exact expression, hair, clothes and accessories. No pose acting, blinking, facial changes, swaying, or changes in skull size. Hair/accessories rotate with the body and occlude progressively; [explicit asymmetry and rear design]. Lock camera, seated baseline, vertical head/torso axis, neutral height and light. ABSOLUTELY NO squash, stretch, bouncing or varying height in this sheet: elasticity is added later by code. Consistent pixel clusters and palette, crisp stepped outlines, no anti-aliased illustration style. One full isolated character per cell with transparent gutters, true alpha background, no grid lines, captions, numbers, floor or shadows.
 
