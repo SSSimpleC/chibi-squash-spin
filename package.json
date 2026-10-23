@@ -1,8 +1,8 @@
 {
   "name": "chibi-squash-spin",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "private": true,
-  "description": "《朋友的酒（DJ版）》欧耶耶像素旋转梗：144px二头身坐姿，先直接绘制完整旋转序列、验收后再施加Q弹。Codex pixel chibi spin skill.",
+  "description": "《朋友的酒（DJ版）》欧耶耶像素旋转梗：144px、24帧、15°，纯二维单帧绘制与相邻帧验收，通过后添加Q弹。Codex pixel chibi spin skill.",
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": { "test": "node --test tests/*.test.mjs" },

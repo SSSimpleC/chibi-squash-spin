@@ -1,21 +1,20 @@
-# v2：144px 像素直接序列流程
+# 制作命令与记录
 
-依赖 Node.js >=22、`npm ci`、PATH 中的 FFmpeg。工具不画角色，不做时间补间。旧版 12 朝向 + 控制点配置不能直接当作 v2 输入；需先补齐真实旋转源帧。旧实现保存在 Git 历史中。
+依赖Node.js≥22、`npm ci`、PATH中的FFmpeg。脚本不画角色、不制造旋转、不做时间补间。先读 [standard.md](standard.md)；只对真实二维生成素材做机械处理。
 
-## 1. 整理完整源序列
+## 1. 帧表与配置
 
-默认至少 24 帧。每张 PNG 或拼图裁块代表一个真实不同朝向，均为同一自然高度，尚未 Q 弹。所有源图保留在任务目录。
+```sh
+node scripts/standard.mjs /path/to/job/frame-plan.json
+```
 
-创建 `config.json`：
+输出24帧的目标角、前后关系、补画端点、80ms时长及Q弹比例。帧表是计划，不是验收。
+
+`config.json` 使用固定标准，省略的参数由脚本填入：
 
 ```json
 {
-  "style": "pixel",
-  "sizes": [144],
-  "paletteColours": 48,
-  "margin": 0.045,
-  "squashMin": 0.6666666666666666,
-  "bounces": 2,
+  "profile": "pixel-144-24-v1",
   "keyframes": [
     {"angle": 0, "file": "source/frame-0000.png", "anchor": [0.5, 0.95]},
     {"angle": 15, "file": "source/frame-0001.png", "anchor": [0.5, 0.95]}
@@ -23,43 +22,54 @@
 }
 ```
 
-示例只展示前两项；实际必须有完整的 24…96 项，等间隔覆盖 0…360，末尾不复制 360 度。24 帧时角度为 0、15……345；36 帧时为 0、10……350。`frames` 通常省略，自动使用源图数量；不能设置为更大值以扩增稀疏朝向。
+这里只展示两项；实际须有24项0、15…345°。F01对应frame-0000.png，F24对应frame-0023.png。不能重复360°或为了凑帧数复用文件。路径相对于配置文件。
 
-`anchor` 是裁块内归一化的 `[头／躯干旋转轴x, 坐姿接触底线y]`，不是全图质心。源图来自拼图时可加 `crop:{left,top,width,height}`，单位为实际像素，anchor 相对于裁块。路径相对于配置文件。
+`anchor` 是裁块内归一化的 `[头/躯干旋转轴x, 坐姿接触底线y]`，必须观察后标定，不是轮廓中心或全图质心。旧拼图素材可以加 `crop:{left,top,width,height}`，anchor相对于裁块。不要把所有图的任意透明边界当作身体轴。
 
-默认每张 80ms；24 张为 1.92 秒。需要改变速度时可设置 `durationSeconds`，要求每帧是至少 20ms 的 10ms 整数倍。Q 弹总是按实际 N 帧计算两次周期，不给同一方向加额外帧。
+默认标准会拒绝未经说明的尺寸、帧数、时长、色板、边距或Q弹参数漂移。用户明确改规格时才设 `profile:"custom"`、`specChangeReason`，并显式写改变的参数；自定义仍要求24…96个等角度目标、源帧与成品帧一一对应、像素风及完整验收。不能以custom绕过旋转失败。
 
-## 2. 先制作、检查纯旋转
+## 2. 登记与纯旋转
 
 ```sh
-node scripts/spin.mjs prepare /path/to/config.json /path/to/job/prepared
+node scripts/spin.mjs prepare /path/to/job/config.json /path/to/job/prepared
 ```
 
-输出目录必须不存在。`prepare`：
+目标目录必须不存在。prepare会：
 
-- 检查帧数、角度标签和源高矮；源高相对于画布变化超过 15% 时拒绝疑似预制 Q 弹。这个检查不能证明姿态正确。
-- 以头／躯干轴和坐姿底线统一登记，最多保留轻微源比例差的高度校正，不删除独立配饰。
-- 以最近邻映射到 144 网格，alpha 二值化、全圈共用最多 48 色调色板，避免逐帧独立量化引起颜色闪烁。
-- 预留整圈最大横向拉伸需要的画布；拒绝在登记后完全相同的姿态。
-- 导出 `poses/`、`rotation-only-144.gif`、`rotation-contact.png`、`rotation-diagnostics.json`、`manifest.json` 与 `rotation-review.template.json`。
+- 检查帧数、角度目标、完全重复帧及明显源高度异常。源高度跨度超过15%是自动拒绝线，不是允许15%身体变形的视觉标准。
+- 按同一坐姿底线/转轴登记，以各源帧高度校准轻微生成尺寸差。该校准不能修头身比例或独立扭头；画面仍须检查。
+- 统一保留最大横向拉伸空间，最近邻映射到144网格、硬alpha、整圈共享最多48槽调色板。
+- 输出 `poses/`、`manifest.json`、`rotation-only-144.gif`、`rotation-contact.png`、全部 `rotation-windows/window-Fxx.png`、诊断和检查模板。
 
-实际观看纯旋转 GIF，并检查接触表及可疑相邻帧。复制模板为 `rotation-review.json`，记录检查者、证据、具体观察与结论。不能用脚本批量勾选模拟观察，也不能为了绕过门槛修改工具。
+## 3. 相邻对与顺序验收
 
-以下检查全部合格后才能设置 `status: "passed"`：二头身、短脚收拢、双手在两侧、原人物神态、身份服饰稳定、无预制 Q 弹、每帧转向推进、正侧背完整、首尾连续、像素画风。`observations` 分别记录比例、神态、正转侧、背面半圈、回正面、首尾的真实表现。
+```sh
+node scripts/audit-rotation.mjs create /path/to/job/prepared /path/to/job/audit
+```
 
-诊断中的像素差和角度标签仅提供检查入口，不证明正确旋转。若存在少量方向反复保持、变脸、动作改变或突然换装，状态必须为 needs-repair，回到源图修补。
+按 [quality.md](quality.md) 检查。只把 `images/` 和 `answers.template.json` 给盲检者，不给答案键。实际查看后写 `answers.json`，再核对：
 
-## 3. 最后施加 Q 弹
+```sh
+node scripts/audit-rotation.mjs validate /path/to/job/audit
+```
+
+`rotation-review.template.json` 复制为 `rotation-review.json`，填写：
+
+- `blindAudit`: 相对于prepared的审核目录路径，如 `../audit`。
+- `steps`: 24个有序前进步，含首尾；实际看三帧窗口，写forward、小且近似均匀、头身共转、身份稳定及具体证据。未确认就不填通过。
+- 比例、神态、各段、首尾的整体观察、检查者、实际证据路径；最终status只有真实合格才为passed。
+
+无角度相邻对检查只能判断是否有转向；有序窗口检查方向和步幅；整圈播放与母版对比检查动画观感和身份。三者不能互相替代。审核与当前姿态像素摘要绑定；源图更换后重做prepare和审核。
+
+## 4. 渲染与成品检查
 
 ```sh
 node scripts/spin.mjs render /path/to/job/prepared /path/to/job/output
 node scripts/spin.mjs validate /path/to/job/output
 ```
 
-`render` 要求有效的纯旋转检查记录，记录必须匹配当前源序列摘要。**源帧 i → 成品帧 i**，无时间插值、淡入淡出、镜像、纹理切换或重复朝向。源图更换后需要重新 prepare 和观察。
+render要求相邻对、顺序步与整体记录通过。源姿态i只生成成品帧i；按standard中的余弦周期做固定底线的最近邻横竖缩放，不复制方向或混合角色图。
 
-缩放公式：`sy=(1+squashMin)/2+(1-squashMin)/2*cos(2π*bounces*i/N)`，`sx=1/sy`。围绕固定轴／坐姿底线用最近邻做横竖缩放，像素颜色不会因平滑滤波新增。
+输出：`spin-144.gif`、`rotation-only-144.gif`、`frames-144/`、`pose-only/`、两种接触表、`rotation-audit/`、`rotation-windows/`、`validation.json`、`reproduction.json`。默认帧数24、80ms/帧、1.92秒，画面144×144。
 
-成品输出：`spin-144.gif`、`rotation-only-144.gif`、`frames-144/`、`pose-only/`、`contact-sheet.png`、`validation.json` 和 `reproduction.json`。自动检查覆盖帧数一一对应、无重复中性帧、统一色板、硬 alpha、边界、时序和 GIF 残影；`visualReview` 保持 pending，等待成品观察。
-
-需要放大观察时，只用整数倍最近邻预览或浏览器 `image-rendering: pixelated`，不要把放大预览当作另一个真实像素规格。调尺寸或 Q 弹强度时从原始像素素材重新 prepare，不能直接放大已压缩 GIF。
+自动检查覆盖格式、硬alpha、颜色、边界、GIF残影、摘要及审核记录完整性，不会判断人物是否真的转了15°。`visualReview` 保持pending，完成实际成品观察后才更新。最近邻放大图仅用于检查，不是额外分辨率成品。

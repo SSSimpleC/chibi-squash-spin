@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
+import { STANDARD } from './standard.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -14,7 +15,7 @@ export const saveJSON = (file, value) => fs.writeFile(file, JSON.stringify(value
 export const frameName = i => `frame-${String(i).padStart(4, '0')}.png`;
 export const hash = data => createHash('sha256').update(data).digest('hex');
 export const newDirectory = dir => fs.mkdir(dir, { recursive: false });
-export const REVIEW_CHECKS = ['twoHeadChibi', 'shortTuckedFeet', 'armsAtSides', 'referenceExpression', 'stableIdentityAndCostume', 'neutralHeightBeforeSquash', 'everyFrameAdvances', 'frontSideBackCoverage', 'seamContinuous', 'pixelArtStyle'];
+export const REVIEW_CHECKS = ['twoHeadChibi', 'shortTuckedFeet', 'armsAtSides', 'referenceExpression', 'stableIdentityAndCostume', 'neutralHeightBeforeSquash', 'everyFrameAdvances', 'headBodyTurnTogether', 'nearUniformSteps', 'frontSideBackCoverage', 'seamContinuous', 'pixelArtStyle'];
 
 export function bounds(data, width, height, threshold = 0) {
   let x0 = width, x1 = -1, y0 = height, y1 = -1, area = 0;
@@ -86,7 +87,8 @@ export function sequenceDiagnostics(frames) {
 
 export async function loadConfig(file) {
   const c = await json(file), base = path.dirname(path.resolve(file));
-  c.style ??= 'pixel'; c.sizes ??= [144]; c.margin ??= .045; c.squashMin ??= 2 / 3; c.bounces ??= 2; c.paletteColours ??= 48;
+  c.profile ??= STANDARD.id;
+  c.style ??= 'pixel'; c.sizes ??= [STANDARD.size]; c.margin ??= STANDARD.margin; c.squashMin ??= STANDARD.squashMin; c.bounces ??= STANDARD.bounces; c.paletteColours ??= STANDARD.paletteColours;
   assert(c.style === 'pixel', 'v2 is a pixel-art direct-sequence workflow; do not reuse the v1 morph pipeline');
   assert(!c.transitions?.length, 'v2 does not accept morph transitions: generate a complete neutral rotation sequence');
   assert(Array.isArray(c.sizes) && c.sizes.length > 0 && c.sizes.every(s => Number.isInteger(s) && s >= 32 && s <= 512), 'sizes: integer 32..512; default [144]');
@@ -100,6 +102,11 @@ export async function loadConfig(file) {
   assert(Number.isFinite(c.squashMin) && c.squashMin >= .5 && c.squashMin <= 1, 'squashMin: .5..1');
   assert(Number.isInteger(c.bounces) && c.bounces >= 0 && c.bounces <= 8, 'bounces: integer 0..8');
   assert(Number.isInteger(c.paletteColours) && c.paletteColours >= 8 && c.paletteColours <= 128, 'paletteColours: integer 8..128');
+  assert([STANDARD.id,'custom'].includes(c.profile), 'Unknown production profile');
+  if(c.profile===STANDARD.id){
+    assert(c.frames===STANDARD.frames && c.sizes.length===1 && c.sizes[0]===STANDARD.size && c.delayCs===STANDARD.delayCs && c.bounces===STANDARD.bounces && Math.abs(c.squashMin-STANDARD.squashMin)<1e-9 && c.margin===STANDARD.margin && c.paletteColours===STANDARD.paletteColours,
+      'pixel-144-24-v1 fixes 144px, 24 frames, 80ms, 2 bounces, squash 2/3, margin .045 and 48 colours; a user-requested specification change needs profile custom and specChangeReason');
+  } else assert(typeof c.specChangeReason==='string' && c.specChangeReason.trim().length>=8,'Custom specification requires specChangeReason describing the user-requested change, not a way to hide failed rotation');
   c.keyframes.sort((a,b) => a.angle-b.angle);
   for (let i = 0; i < c.frames; i++) {
     const k = c.keyframes[i];

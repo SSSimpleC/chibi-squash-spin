@@ -4,8 +4,10 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import sharp from 'sharp';
-import { prepare, render, validate } from '../scripts/spin.mjs';
+import { prepare, render, validate, checkSequenceSteps } from '../scripts/spin.mjs';
+import { createAudit, validateAudit } from '../scripts/audit-rotation.mjs';
 import { loadConfig, nearestTransform, readRGBA, paletteCount, sharedPalette, REVIEW_CHECKS, json } from '../scripts/core.mjs';
+import { STANDARD, framePlan, squashAt } from '../scripts/standard.mjs';
 
 async function fixture(dir, count=24, options={}){
   const keys=[];
@@ -20,12 +22,46 @@ async function temp(t,prefix){const dir=await fs.mkdtemp(path.join(os.tmpdir(),p
 async function fixtureReview(prepared){
   const r=await json(path.join(prepared,'rotation-review.template.json'));r.status='passed';r.checks=Object.fromEntries(REVIEW_CHECKS.map(k=>[k,true]));
   r.observations=Object.fromEntries(Object.keys(r.observations).map(k=>[k,'Synthetic geometry fixture; this validates the tool contract, not actual character quality.']));r.reviewer='automated regression fixture';
+  for(const s of r.steps){s.progress='forward';s.stepSize='small-even';s.headBodyCoupled=true;s.appearanceStable=true;s.observation='Synthetic test contract only, not observed character rotation.';}
+  const dir=path.join(prepared,'audit');await createAudit(prepared,dir);
+  const key=await json(path.join(dir,'answer-key.json')),a=await json(path.join(dir,'answers.template.json'));
+  a.reviewer='Synthetic regression fixture only, not a visual character review';
+  for(const p of a.pairs){const k=key.entries.find(e=>e.id===p.id);p.verdict=k.kind==='adjacent'?'clear-rotation':'same-heading';p.identityStable=true;p.headGeometry='Synthetic fixture for exercising review completeness, not visual evidence.';p.torsoGeometry=p.headGeometry;}
+  await fs.writeFile(path.join(dir,'answers.json'),JSON.stringify(a));r.blindAudit='audit';
   await fs.writeFile(path.join(prepared,'rotation-review.json'),JSON.stringify(r));
 }
 
 test('default is 144px, duration and output count follow the 24 drawn source frames',async t=>{
   const d=await temp(t,'chibi-v2-config-'),f=await fixture(d),c=await loadConfig(f);
   assert.deepEqual(c.sizes,[144]);assert.equal(c.frames,24);assert.equal(c.delayCs,8);assert.equal(c.durationSeconds,1.92);
+});
+test('fixed profile refuses silent frame, size, timing or bounce changes; explicit custom profile records why',async t=>{
+  const d=await temp(t,'chibi-standard-');
+  for(const options of [{sizes:[256]},{durationSeconds:2.4},{bounces:3},{squashMin:.8},{paletteColours:64}]){
+    const f=await fixture(d,24,options);await assert.rejects(loadConfig(f),/fixes 144px/);
+  }
+  let f=await fixture(d,36);await assert.rejects(loadConfig(f),/fixes 144px/);
+  f=await fixture(d,36,{profile:'custom'});await assert.rejects(loadConfig(f),/specChangeReason/);
+  f=await fixture(d,36,{profile:'custom',specChangeReason:'Test fixture representing an explicit 36-pose user request.'});assert.equal((await loadConfig(f)).frames,36);
+});
+test('frame plan has 24 evenly spaced targets, midpoint brackets and wrap, with exact two-bounce scaling',()=>{
+  const p=framePlan();assert.equal(p.standard.id,STANDARD.id);assert.equal(p.frames.length,24);
+  for(let i=0;i<24;i++){
+    const f=p.frames[i];assert.equal(f.targetYaw,i*15);assert.equal(f.index,i);assert.equal(f.delayMs,80);
+    assert.ok(Math.abs(f.scaleX*f.scaleY-1)<1e-12);assert.deepEqual(squashAt(i),squashAt(i+24));
+    if(i%2){assert.equal(f.bracket.length,2);assert.equal(f.bracket[0],p.frames[i-1].frame);assert.equal(f.bracket[1],p.frames[(i+1)%24].frame);}
+  }
+  assert.deepEqual(p.frames[23].bracket,['F23','F01']);assert.equal(p.frames[23].next,'F01');
+  const extrema=p.frames.filter(f=>Math.abs(f.scaleY-2/3)<1e-12);assert.deepEqual(extrema.map(f=>f.index),[6,18]);
+  assert.ok(p.frames[23].scaleY<1);assert.ok(Math.abs((p.frames[0].scaleY-p.frames[23].scaleY)-(p.frames[0].scaleY-p.frames[1].scaleY))<1e-12);
+});
+test('ordered windows cannot approve reverse, hold, jump, decoupled head/body or a missing wrap',()=>{
+  const steps=Array.from({length:24},(_,i)=>({from:i,to:(i+1)%24,progress:'forward',stepSize:'small-even',headBodyCoupled:true,appearanceStable:true,observation:'Synthetic fixture for contract checks, not real visual evidence.'}));
+  checkSequenceSteps({steps},24);
+  for(const mutation of [{progress:'reverse'},{progress:'hold'},{stepSize:'jump'},{headBodyCoupled:false},{appearanceStable:false}]){
+    const s=structuredClone(steps);Object.assign(s[8],mutation);assert.throws(()=>checkSequenceSteps({steps:s},24),/needs repair/);
+  }
+  const s=structuredClone(steps);s[23].to=24;assert.throws(()=>checkSequenceSteps({steps:s},24),/include wrap/);
 });
 test('sparse directions and output count inflation cannot masquerade as rotation',async t=>{
   const d=await temp(t,'chibi-v2-sparse-');let f=await fixture(d,12);await assert.rejects(loadConfig(f),/24..96/);
@@ -70,6 +106,19 @@ test('a changed neutral sequence invalidates the visual review',async t=>{
   const d=await temp(t,'chibi-v2-stale-'),f=await fixture(d),p=path.join(d,'prepared');await prepare(f,p);await fixtureReview(p);
   const file=path.join(p,'poses/frame-0003.png'),im=await readRGBA(file);im.data[(90*144+72)*4]=17;await sharp(im.data,{raw:{width:144,height:144,channels:4}}).png().toFile(file);
   await assert.rejects(render(p,path.join(d,'out')),/changed after review/);
+});
+test('blanket visual approval cannot bypass the blind pair audit',async t=>{
+  const d=await temp(t,'chibi-v2-blind-'),f=await fixture(d),p=path.join(d,'prepared');await prepare(f,p);await fixtureReview(p);
+  const file=path.join(p,'rotation-review.json'),r=await json(file);delete r.blindAudit;await fs.writeFile(file,JSON.stringify(r));
+  await assert.rejects(render(p,path.join(d,'out')),/blind adjacent-pair audit is required/);
+});
+test('blind audit rejects all-rotation answers and a same-heading real pair',async t=>{
+  const d=await temp(t,'chibi-v2-controls-'),f=await fixture(d),p=path.join(d,'prepared');await prepare(f,p);await fixtureReview(p);
+  const dir=path.join(p,'audit'),file=path.join(dir,'answers.json'),a=await json(file),key=await json(path.join(dir,'answer-key.json'));
+  for(const pair of a.pairs)pair.verdict='clear-rotation';await fs.writeFile(file,JSON.stringify(a));assert.equal((await validateAudit(dir)).status,'needs-repair');
+  for(const pair of a.pairs)pair.verdict=key.entries.find(e=>e.id===pair.id).kind==='adjacent'?'clear-rotation':'same-heading';
+  const real=key.entries.find(e=>e.kind==='adjacent');a.pairs.find(x=>x.id===real.id).verdict='same-heading';await fs.writeFile(file,JSON.stringify(a));
+  await assert.rejects(render(p,path.join(d,'out')),/Blind rotation audit needs repair/);
 });
 test('direct 144px loop: one distinct source pose per frame, no morph, stable baseline, palette and GIF disposal',async t=>{
   const d=await temp(t,'chibi-v2-loop-'),f=await fixture(d),p=path.join(d,'prepared'),o=path.join(d,'output'),c=await prepare(f,p);await fixtureReview(p);

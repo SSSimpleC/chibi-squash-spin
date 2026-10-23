@@ -1,4 +1,4 @@
 interface:
   display_name: "朋友的酒 · 144px像素弹转"
-  short_description: "保留角色神态，先画二头身短脚坐姿的完整旋转序列，再制作144px像素Q弹梗图"
-  default_prompt: "使用 $chibi-squash-spin，把这张设定图制作成144px像素风二头身坐姿，短脚收拢、双手垂在身体两侧、保留原角色神态。先直接生成完整连续旋转序列并检查，再添加《朋友的酒（DJ版）》欧耶耶梗的Q弹。"
+  short_description: "沿用Q版母版，按144px、24帧、15°逐张绘制并检查纯二维旋转，再添加Q弹"
+  default_prompt: "使用 $chibi-squash-spin，保留这位角色的神态与Q版画风，按144px、24帧、每步15°的统一标准制作《朋友的酒（DJ版）》欧耶耶像素坐姿弹转GIF；先检查纯旋转，再加Q弹。"
