@@ -1,38 +1,37 @@
-# 角色姿态生成与定点修补
+# 直接旋转源帧：身份、比例与像素风
 
-## 参考的角色
+## 参考优先级
 
-- 原设定图：身份、服装、色彩、不对称细节的权威。
-- 已检查的正面坐姿：Q版比例、画风、坐姿的权威。
-- 相邻已检查姿态：转身方向、遮挡、尾巴和发饰连续性的参考。
+1. 人物设定图决定身份与神态，逐项看头发／眼色、眼型与眼睑、眉毛、嘴角、情绪、服饰与配饰。
+2. 用户给的二头身示例只决定比例；不要把示例的发色、衣服、表情套到目标角色上。
+3. 已验收的正面像素坐姿决定简化后的同一模型。后续整圈都引用它，不能每组重新设计角色。
 
-先用 `view_image` 查看本地输入图，再通过图片生成工具的引用路径传入。图片生成负责角色内容；裁切拼图、配准、格式转换与导出由确定性脚本处理。
+建议 `character-contract.json` 记录：`identityFeatures`、`expression`、`seatedPose`、`asymmetry`、`palette`、`backDesignInferences`、`basePoseReview`。内容应来自实际观察，不能用泛化的“可爱微笑”替代。
 
-单张角色的有效分辨率应满足最后 512 输出，通常至少约 512 像素高。拼图总像素不等于每个角色的像素；检查生成文件的真实尺寸和每格可见内容。多格结果过小时改为较少格或逐张生成，不放大已有小图。
+## 正面像素坐姿提示词
 
-## 正面坐姿提示词示例
+把括号内容替换为观察结果：
 
-把方括号替换成实际观察，不直接保留占位符：
+> Create ONE pixel-art sprite of the character from the identity reference. The second reference, if supplied, is ONLY a two-head-tall proportion example, not the character identity. Preserve [hair shape and colour, eye shape/eyelids/colour, eyebrow angle, mouth and emotional attitude, outfit, accessories, asymmetry]. Extremely compact super-deformed two-head-tall proportions; when seated the head from crown to chin is about 60% of the visible body height. Sit on the bottom, tiny bent legs tucked close under the outfit, small shoes close to the body. Both arms hang naturally at the body's sides with small hands beside the hips, NOT on knees. No long legs toward the camera, no large shoe soles. [Exact reference expression], no added smile unless the identity reference has it. Deliberate low-resolution pixel-art clusters, hard stepped outlines, limited coherent palette, readable at 144×144, no painterly detail, no smooth gradients or soft lighting. Full silhouette on genuine transparent alpha. Front view, fixed camera, neutral unsquashed proportions, no floor/shadow/text/checkerboard.
 
-> Create a high-resolution chibi seated version of the character in the reference. Preserve [specific hair, face, palette, outfit, accessories, asymmetric features]. A large head and compact body, sitting on the bottom with [fixed leg and hand arrangement], cheerful expression. Keep [reference style]. Entire silhouette visible, true transparent background. Front-facing, fixed orthographic camera, character upright around one vertical head/torso axis. No floor, cast shadow, checkerboard, text, or extra figures. Do not bake squash, stretch, bounce, or rotation into this base pose.
+生成源图可能比 144 大，允许后处理映射到 144 像素网格，但源画本身应是像素风。检查头、手脚和表情后才继续；不能把生成器给出的高清二次元画直接缩小当作通过。
 
-## 方向组提示词示例
+## 完整中性旋转序列提示词
 
-可从 0、30、60……330 度规划整圈，但将这些度数视为**绘制目标**，不能把标签当作实测角度。通常每组 3–4 张，引用同一正面坐姿并附上相邻已接受姿态。
+优先 6 列 × 4 行的 24 帧整圈。角度是绘制目标，并非生成结果自动具有正确角度。相机固定，旋转的是同一个坐着的人偶；0 为正面，90 为一个侧面，180 为背面，270 为另一侧，345 回到近正面。选择一个方向后保持整圈一致。
 
-> Draw [N] clearly separated high-resolution poses of the SAME seated chibi character, at consecutive yaw targets [angles], where 0 is front and 180 is back, rotating toward [image left/right]. Match the approved reference's identity, skull size, outfit, seated pose and line style. Camera, lighting, pelvis position and seated baseline stay fixed. Hair, ears, tail and clothing turn WITH the body with plausible progressive occlusion. [List visible and hidden features for this interval.] Do not duplicate the same angle. No squash or stretch yet. Equal cells with transparent gutters; full silhouette inside every cell. True transparent background, no labels, grid, shadows or extra characters.
+> Make a complete 24-frame PIXEL-ART turntable sprite sheet of the EXACT same approved seated chibi model. Six equal columns, four equal rows, row-major chronological order. Frame yaw targets: row 1 [0,15,30,45,60,75]; row 2 [90,105,120,135,150,165]; row 3 [180,195,210,225,240,255]; row 4 [270,285,300,315,330,345]. Each adjacent frame advances a small equal yaw step; do not repeat a direction. Last frame is almost front so it wraps naturally to frame 0. Maintain the same large head, short tucked feet, both hands hanging at hips, exact expression, hair, clothes and accessories. No pose acting, blinking, facial changes, swaying, or changes in skull size. Hair/accessories rotate with the body and occlude progressively; [explicit asymmetry and rear design]. Lock camera, seated baseline, vertical head/torso axis, neutral height and light. ABSOLUTELY NO squash, stretch, bouncing or varying height in this sheet: elasticity is added later by code. Consistent pixel clusters and palette, crisp stepped outlines, no anti-aliased illustration style. One full isolated character per cell with transparent gutters, true alpha background, no grid lines, captions, numbers, floor or shadows.
 
-对于非对称设计明确写出“角色自身左／右”及图像中对应位置，不能把正面“图像左侧”沿用到背面。
+给图片生成工具的参考应包括原设定与已接受的正面。不要把仍有长腿／神态错误的初版作为权威母版。
 
-## 分段检查与修补
+## 查漏与补画
 
-| 现象 | 优先处理 |
-| --- | --- |
-| 多帧几乎相同，随后突然转过去 | 改关键姿态的方向分配；补画中间角度 |
-| 尾巴或手突然换侧、出现或消失 | 检查部件归属和遮挡顺序；补画遮挡变化 |
-| 面部／服装细节漂移 | 以正面坐姿和邻帧共同作为身份参考 |
-| 轮廓晃动 | 检查头／躯干轴和坐姿锚点，不用全图质心定位 |
-| 配准后出现融化或双影 | 缩短补间跨度、调整对应点或改为直接绘制 |
-| 最后回第一帧卡顿 | 检查 330→0 区间，不追加一张重复的 360 度正面 |
+- 对照帧 0/6/12/18 检查正面、侧面、背面、另一侧，随后逐帧检查其间的转向。不会仅因有 24 张图就验收。
+- 针对失败区间引用前后正确邻帧与全圈母版，要求直接画缺失的中间姿态，不重画整个角色设计。
+- 同一个朝向停留几帧后跳转：补真正的中间方向，而非多做几张压扁图。
+- 配饰忽现、错侧或背面露出正面鞋：修正遮挡。不要用镜像或者纹理切换盖住。
+- 神态漂移：重新指出眼睑、眼型、嘴形，不把“same character”当作足够约束。
+- 源序列已经有明显高矮变化：重画为自然高度，之后才统一 Q 弹。
+- 像素图边缘有模糊、柔光或插画渐变：回到像素风生成步骤，不能把清晰度下降当作像素风。
 
-修补只替换失败区间，并同时查看前后邻帧。生成图若没有改善可弃用，但记录哪些图进入了成品，不声称弃用图已用于动画。
+裁切必须按实际透明沟槽定位，检查边角配饰是否越格；保留属于角色的独立像素块，不能默认只取最大连通区域。背景不透明时使用图片生成工具修正透明背景，不能用会擦掉眼白／白衣的简单白色删除替代。

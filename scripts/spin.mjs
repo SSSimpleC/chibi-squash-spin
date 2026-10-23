@@ -3,134 +3,117 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import sharp from 'sharp';
-import { assert, json, saveJSON, newDirectory, frameName, bounds, readRGBA, transform, difference, writePNG, loadConfig, interval } from './core.mjs';
-import { morph, signedDistance, validatePoints } from './morph.mjs';
+import { assert, json, saveJSON, newDirectory, frameName, bounds, readRGBA, nearestTransform, binaryAlpha, writePNG, loadConfig, sharedPalette, sequenceDiagnostics, paletteCount, REVIEW_CHECKS } from './core.mjs';
 import { encodeGIF, inspectGIF } from './gif.mjs';
 
-export async function contactSheet(files, out, size = 128) {
+export async function contactSheet(files, out, size = 144) {
   const cols = Math.min(6, files.length), cellH = size + 22, rows = Math.ceil(files.length / cols), items = [];
-  for (let i = 0; i < files.length; i++) {
-    const tile = await sharp(files[i]).resize(size, size).png().toBuffer();
-    items.push({ input: tile, left: (i % cols) * size, top: Math.floor(i / cols) * cellH });
-    const label = Buffer.from(`<svg width="${size}" height="22"><text x="8" y="16" fill="#eee" font-size="13" font-family="sans-serif">${i}</text></svg>`);
-    items.push({ input: label, left: (i % cols) * size, top: Math.floor(i / cols) * cellH + size });
+  for (let i=0;i<files.length;i++) {
+    items.push({ input:await sharp(files[i]).resize(size,size,{kernel:'nearest'}).png().toBuffer(), left:i%cols*size, top:Math.floor(i/cols)*cellH });
+    const label=Buffer.from(`<svg width="${size}" height="22"><text x="8" y="16" fill="#eee" font-size="13" font-family="sans-serif">${i} / ${(i*360/files.length).toFixed(1)}°</text></svg>`);
+    items.push({input:label,left:i%cols*size,top:Math.floor(i/cols)*cellH+size});
   }
-  await sharp({ create: { width: cols * size, height: rows * cellH, channels: 4, background: '#353740' } }).composite(items).png().toFile(out);
+  await sharp({create:{width:cols*size,height:rows*cellH,channels:4,background:'#353740'}}).composite(items).png().toFile(out);
+}
+function checkInside(data,size,label) {
+  const b=bounds(data,size,size);
+  assert(b.x0>0&&b.x1<size-1&&b.y0>0&&b.y1<size-1,`${label} touches canvas edge; adjust common margin, never crop each animation frame separately`); return b;
 }
 
-export async function prepare(configFile, out) {
-  const c = await loadConfig(configFile), size = c.masterSize, source = [];
-  let maxX = 0, maxUp = 0, maxDown = 0;
-  for (const k of c.keyframes) {
-    let image = sharp(k.file); if (k.crop) image = image.extract(k.crop);
-    const { data, info } = await image.toColourspace('srgb').ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-    const b = bounds(data, info.width, info.height), ax = k.anchor[0] * info.width, ay = k.anchor[1] * info.height;
-    assert(Math.abs(ay - b.y1 - 1) <= Math.max(3, b.height * .04), `Baseline for angle ${k.angle} is not near the seated bottom; inspect anchor`);
-    maxX = Math.max(maxX, Math.abs(b.x0 - ax) / b.height, Math.abs(b.x1 + 1 - ax) / b.height);
-    maxUp = Math.max(maxUp, (ay - b.y0) / b.height); maxDown = Math.max(maxDown, (b.y1 + 1 - ay) / b.height);
-    source.push({ ...k, data, width: info.width, height: info.height, b, ax, ay });
+export async function prepare(configFile,out) {
+  const c=await loadConfig(configFile),size=c.masterSize,source=[];let maxX=0,maxUp=0,maxDown=0;
+  for(const k of c.keyframes){
+    let image=sharp(k.file);if(k.crop)image=image.extract(k.crop);
+    const {data:input,info}=await image.toColourspace('srgb').ensureAlpha().raw().toBuffer({resolveWithObject:true});const data=binaryAlpha(input);
+    const b=bounds(data,info.width,info.height),ax=k.anchor[0]*info.width,ay=k.anchor[1]*info.height;
+    assert(Math.abs(ay-b.y1-1)<=Math.max(3,b.height*.035),`Angle ${k.angle}: baseline must be the seated contact point`);
+    assert(b.width<info.width||b.height<info.height,`Angle ${k.angle}: opaque rectangular background; regenerate with real transparency`);
+    maxX=Math.max(maxX,Math.abs(b.x0-ax)/b.height,Math.abs(b.x1+1-ax)/b.height);
+    maxUp=Math.max(maxUp,(ay-b.y0)/b.height);maxDown=Math.max(maxDown,(b.y1+1-ay)/b.height);
+    source.push({...k,data,width:info.width,height:info.height,b,ax,ay});
   }
-  // Downsampling needs a few pixels of room for the reconstruction filter.
-  const effectiveMargin = Math.max(c.margin, 4 / Math.min(...c.sizes));
-  const baseY = size * (1 - effectiveMargin), axisX = size / 2;
-  const targetHeight = Math.min(size * (.5 - effectiveMargin) * c.squashMin / maxX, size * (1 - 2 * effectiveMargin) / maxUp, maxDown > 0 ? size * effectiveMargin / maxDown : Infinity);
-  assert(Number.isFinite(targetHeight) && targetHeight > 0, 'Invalid character geometry');
-  for (const s of source) assert(c.allowUpscale === true || targetHeight <= s.b.height * 1.001, `Angle ${s.angle} needs upscaling (${s.b.height}px source, ${targetHeight.toFixed(1)}px target). Generate larger source art or explicitly set allowUpscale for a diagnostic only.`);
-  await newDirectory(out); await fs.mkdir(path.join(out, 'poses'));
-  const keys = [];
-  for (let i = 0; i < source.length; i++) {
-    const s = source[i], scale = targetHeight / s.b.height, data = transform(s.data, s.width, s.height, size, s.ax, s.ay, scale, scale, axisX, baseY);
-    const file = `poses/pose-${String(i).padStart(3, '0')}.png`; await writePNG(path.join(out, file), data, size);
-    keys.push({ angle: s.angle, file, source: s.file, sourceSize: [s.width, s.height], scale, sourceAnchor: s.anchor, sourceCrop: s.crop ?? null });
+  // Compare height relative to each source canvas; tolerate minor generation/cropping drift, not baked-in squash.
+  const relativeHeights=source.map(s=>s.b.height/s.height),spread=Math.max(...relativeHeights)/Math.min(...relativeHeights);
+  assert(spread<=1.15,`Neutral source heights vary ${(100*(spread-1)).toFixed(1)}%; repair the rotation sequence before adding squash (no baked-in Q bounce)`);
+  const margin=Math.max(c.margin,2/Math.min(...c.sizes)),axisX=Math.floor(size/2),baselineY=Math.floor(size*(1-margin));
+  const targetHeight=Math.min(size*(.5-margin)*c.squashMin/maxX,size*(1-2*margin)/maxUp,maxDown>0?size*margin/maxDown:Infinity);
+  assert(Number.isFinite(targetHeight)&&targetHeight>0,'Invalid source geometry');
+  for(const s of source)assert(targetHeight<=s.b.height*1.001,`Angle ${s.angle} requires upscaling; generate a usable source sprite instead`);
+  const registered=source.map(s=>nearestTransform(s.data,s.width,s.height,size,s.ax,s.ay,targetHeight/s.b.height,targetHeight/s.b.height,axisX,baselineY));
+  const frames=await sharedPalette(registered,size,c.paletteColours),diagnostics=sequenceDiagnostics(frames);
+  assert(diagnostics.duplicates.length===0,`Repeated neutral pose after pixel registration: ${JSON.stringify(diagnostics.duplicates)}. Generate missing rotation frames; no repeated-angle Q animation.`);
+  frames.forEach((f,i)=>checkInside(f,size,`Neutral frame ${i}`));
+  await newDirectory(out);await fs.mkdir(path.join(out,'poses'));
+  const keys=[];
+  for(let i=0;i<frames.length;i++){
+    const file=`poses/${frameName(i)}`;await writePNG(path.join(out,file),frames[i],size);
+    keys.push({angle:source[i].angle,file,source:source[i].file,sourceCrop:source[i].crop??null,sourceSize:[source[i].width,source[i].height],sourceAnchor:source[i].anchor,scale:targetHeight/source[i].b.height});
   }
-  const manifest = { version: 1, ...c, keyframes: keys, effectiveMargin, axisX, baselineY: baseY, targetHeight, note: 'Landmarks must be measured on these canonical poses, not on the original sheet. Normalize coordinates by masterSize.' };
-  await saveJSON(path.join(out, 'manifest.json'), manifest);
-  await contactSheet(keys.map(k => path.join(out, k.file)), path.join(out, 'keyframes-contact.png'));
+  const manifest={version:2,...c,keyframes:keys,effectiveMargin:margin,axisX,baselineY,targetHeight,sourceHeightSpread:spread,rotationDigest:diagnostics.digest,sequenceMode:'direct-one-source-frame-per-output-frame'};
+  await saveJSON(path.join(out,'manifest.json'),manifest);await saveJSON(path.join(out,'rotation-diagnostics.json'),diagnostics);
+  await contactSheet(keys.map(k=>path.join(out,k.file)),path.join(out,'rotation-contact.png'),size);
+  const rotationGif=path.join(out,`rotation-only-${size}.gif`);await encodeGIF(path.join(out,'poses'),rotationGif,c.frames,c.delayCs,true);
+  await inspectGIF(rotationGif,path.join(out,'poses'),size,c.frames,c.delayCs);
+  await saveJSON(path.join(out,'rotation-review.template.json'),{version:2,rotationDigest:diagnostics.digest,status:'pending',checks:Object.fromEntries(REVIEW_CHECKS.map(k=>[k,false])),observations:{proportions:'',expression:'',frontToSide:'',backHalf:'',returnToFront:'',seam:''},evidence:[`rotation-only-${size}.gif`,'rotation-contact.png'],reviewer:''});
   return manifest;
 }
 
-function resolveTransitions(c, override) {
-  const transitions = override ?? c.transitions, map = new Map();
-  assert(Array.isArray(transitions), 'Transitions must be an array');
-  for (const tr of transitions) {
-    validatePoints(tr.fromPoints, tr.toPoints);
-    const key = `${tr.fromAngle}:${tr.toAngle}`; assert(!map.has(key), `Duplicate transition ${key}`); map.set(key, tr);
-  }
-  // Fail before writing output; never silently hold/repeat poses or raw-crossfade missing transitions.
-  for (let n = 0; n < c.frames; n++) {
-    const { i, j, t } = interval(c.keyframes, n * 360 / c.frames);
-    if (t > 1e-10) assert(map.has(`${c.keyframes[i].angle}:${c.keyframes[j].angle}`), `Missing landmarks for ${c.keyframes[i].angle} -> ${c.keyframes[j].angle}. Add registered point pairs or directly drawn intermediate poses, including the wraparound interval.`);
-  }
-  return map;
+export async function loadRotationReview(prepared,manifest,frames,reviewFile) {
+  const review=await json(reviewFile??path.join(prepared,'rotation-review.json'));
+  assert(review.version===2&&review.status==='passed','Review the neutral rotation GIF before adding Q bounce; rotation-review.json must record passed after actual inspection');
+  const diagnostics=sequenceDiagnostics(frames);assert(diagnostics.duplicates.length===0,'Neutral sequence contains repeated frames');
+  assert(review.rotationDigest===diagnostics.digest&&manifest.rotationDigest===diagnostics.digest,'Rotation changed after review; inspect the updated sequence and record a new review');
+  assert(REVIEW_CHECKS.every(k=>review.checks?.[k]===true),'Unfinished rotation review: proportions, short feet, arms, expression, consistency, angles, seam, pixel style all required');
+  assert(['proportions','expression','frontToSide','backHalf','returnToFront','seam'].every(k=>typeof review.observations?.[k]==='string'&&review.observations[k].trim().length>=8),'Record concrete observations, not only checkboxes');
+  assert(typeof review.reviewer==='string'&&review.reviewer.trim(),'Record reviewer');
+  assert(Array.isArray(review.evidence)&&review.evidence.length>=2,'Record GIF and contact-sheet evidence paths');
+  for(const p of review.evidence)assert((await fs.stat(path.resolve(prepared,p))).isFile(),`Review evidence missing: ${p}`);
+  return review;
 }
 
-export async function render(prepared, out, transitionFile) {
-  const c = await json(path.join(prepared, 'manifest.json')), size = c.masterSize;
-  assert(c.version === 1, 'Unsupported manifest version');
-  const trOverride = transitionFile ? await json(transitionFile) : undefined, transitions = resolveTransitions(c, trOverride);
-  const keys = [];
-  for (const k of c.keyframes) {
-    const p = await readRGBA(path.resolve(prepared, k.file)); assert(p.width === size && p.height === size, 'Canonical pose size mismatch');
-    keys.push({ ...k, data: p.data, sdf: signedDistance(p.data, size) });
+export async function render(prepared,out,reviewFile) {
+  const c=await json(path.join(prepared,'manifest.json'));assert(c.version===2,'v2 requires a newly prepared direct pixel rotation sequence');const size=c.masterSize,poses=[];
+  for(const k of c.keyframes){const p=await readRGBA(path.join(prepared,k.file));assert(p.width===size&&p.height===size,'Canonical pose size mismatch');poses.push(p.data);}
+  assert(c.frames===poses.length,'Never repeat rotation poses to fill output frames');
+  const review=await loadRotationReview(prepared,c,poses,reviewFile);
+  await newDirectory(out);await fs.mkdir(path.join(out,'pose-only'));for(const s of c.sizes)await fs.mkdir(path.join(out,`frames-${s}`));
+  const records=[];
+  for(let i=0;i<c.frames;i++){
+    const sy=(1+c.squashMin)/2+(1-c.squashMin)/2*Math.cos(2*Math.PI*c.bounces*i/c.frames),sx=1/sy;
+    const frame=nearestTransform(poses[i],size,size,size,c.axisX,c.baselineY,sx,sy,c.axisX,c.baselineY);
+    const b=checkInside(frame,size,`Frame ${i}`);await writePNG(path.join(out,'pose-only',frameName(i)),poses[i],size);
+    for(const s of c.sizes){const img=sharp(frame,{raw:{width:size,height:size,channels:4}});await(s===size?img:img.resize(s,s,{kernel:'nearest'})).png().toFile(path.join(out,`frames-${s}`,frameName(i)));}
+    records.push({frame:i,sourceFrame:i,angle:c.keyframes[i].angle,scaleX:sx,scaleY:sy,axisX:c.axisX,baselineY:c.baselineY,bounds:b});
   }
-  await newDirectory(out); await fs.mkdir(path.join(out, 'pose-only'));
-  for (const s of c.sizes) await fs.mkdir(path.join(out, `frames-${s}`));
-  const poseDiff = [], animatedDiff = [], records = []; let firstPose, prevPose, firstFrame, prevFrame;
-  for (let n = 0; n < c.frames; n++) {
-    const angle = n * 360 / c.frames, { i, j, t } = interval(keys, angle), a = keys[i], b = keys[j];
-    const tr = transitions.get(`${a.angle}:${b.angle}`);
-    const pose = t <= 1e-10 ? Buffer.from(a.data) : morph(a.data, b.data, size, tr.fromPoints, tr.toPoints, t, a.sdf, b.sdf);
-    const sy = (1 + c.squashMin) / 2 + (1 - c.squashMin) / 2 * Math.cos(2 * Math.PI * c.bounces * n / c.frames), sx = 1 / sy;
-    const frame = transform(pose, size, size, size, c.axisX, c.baselineY, sx, sy, c.axisX, c.baselineY), bnd = bounds(frame, size, size);
-    assert(bnd.x0 > 0 && bnd.x1 < size - 1 && bnd.y0 > 0 && bnd.y1 < size - 1, `Frame ${n} touches the canvas edge. Increase common margin and prepare again; do not crop individual frames.`);
-    await writePNG(path.join(out, 'pose-only', frameName(n)), pose, size);
-    for (const s of c.sizes) {
-      const image = sharp(frame, { raw: { width: size, height: size, channels: 4 } });
-      await (s === size ? image : image.resize(s, s, { kernel: 'lanczos3' })).png().toFile(path.join(out, `frames-${s}`, frameName(n)));
-    }
-    if (n) { poseDiff.push(difference(prevPose, pose)); animatedDiff.push(difference(prevFrame, frame)); }
-    else { firstPose = pose; firstFrame = frame; }
-    prevPose = pose; prevFrame = frame;
-    records.push({ frame: n, angle, sourceAngles: [a.angle, b.angle], interpolation: t, scaleX: sx, scaleY: sy, axisX: c.axisX, baselineY: c.baselineY, bounds: bnd });
-  }
-  poseDiff.push(difference(prevPose, firstPose)); animatedDiff.push(difference(prevFrame, firstFrame));
-  const ordered = [...poseDiff].sort((a, b) => a - b), median = ordered[Math.floor(ordered.length / 2)];
-  const flags = poseDiff.flatMap((v, i) => v < .01 || v > Math.max(.1, median * 2.5) ? [{ from: i, to: (i + 1) % c.frames, difference: v, reason: v < .01 ? 'near-duplicate' : 'large-change' }] : []);
-  const gifs = [];
-  for (const s of c.sizes) {
-    const dir = path.join(out, `frames-${s}`), file = path.join(out, `spin-${s}.gif`);
-    await encodeGIF(dir, file, c.frames, c.delayCs); gifs.push(await inspectGIF(file, dir, s, c.frames, c.delayCs));
-  }
-  await contactSheet(records.map(r => path.join(out, `frames-${size}`, frameName(r.frame))), path.join(out, 'contact-sheet.png'));
-  const report = { version: 1, sizes: c.sizes, frames: c.frames, durationSeconds: c.durationSeconds, delayCs: c.delayCs, gifs, poseOnlyDifferences: poseDiff, animatedDifferences: animatedDiff, reviewFlags: flags, records, visualReview: 'pending', automatedPass: false };
-  await saveJSON(path.join(out, 'validation.json'), report);
-  await saveJSON(path.join(out, 'reproduction.json'), { prepared: path.resolve(prepared), manifest: c, transitions: [...transitions.values()] });
-  await validate(out);
-  report.automatedPass = true;
-  await saveJSON(path.join(out, 'validation.json'), report);
-  return report;
+  const gifs=[];for(const s of c.sizes){const dir=path.join(out,`frames-${s}`),file=path.join(out,`spin-${s}.gif`);await encodeGIF(dir,file,c.frames,c.delayCs,true);gifs.push(await inspectGIF(file,dir,s,c.frames,c.delayCs));}
+  const rotationGif=path.join(out,`rotation-only-${size}.gif`);await encodeGIF(path.join(out,'pose-only'),rotationGif,c.frames,c.delayCs,true);
+  await contactSheet(records.map(r=>path.join(out,`frames-${size}`,frameName(r.frame))),path.join(out,'contact-sheet.png'),size);
+  const report={version:2,style:'pixel',sizes:c.sizes,frames:c.frames,sourceFrames:c.keyframes.length,durationSeconds:c.durationSeconds,delayCs:c.delayCs,paletteColours:c.paletteColours,rotationDigest:c.rotationDigest,gifs,records,neutralRotationReview:review,visualReview:'pending',automatedPass:false};
+  await saveJSON(path.join(out,'validation.json'),report);await saveJSON(path.join(out,'reproduction.json'),{prepared:path.resolve(prepared),manifest:c});
+  await validate(out);report.automatedPass=true;await saveJSON(path.join(out,'validation.json'),report);return report;
 }
 
 export async function validate(out) {
-  const report = await json(path.join(out, 'validation.json'));
-  assert(report.version === 1, 'Unsupported report version');
-  for (const size of report.sizes) {
-    const dir = path.join(out, `frames-${size}`);
-    assert((await fs.readdir(dir)).filter(n => /^frame-\d{4}\.png$/.test(n)).length === report.frames, 'Unexpected PNG frame count');
-    for (let i = 0; i < report.frames; i++) {
-      const p = await readRGBA(path.join(dir, frameName(i))); assert(p.width === size && p.height === size, 'PNG size mismatch');
-      const b = bounds(p.data, size, size); assert(b.x0 > 0 && b.x1 < size - 1 && b.y0 > 0 && b.y1 < size - 1, `Clipped PNG frame ${i} at ${size}px`);
-    }
-    await inspectGIF(path.join(out, `spin-${size}.gif`), dir, size, report.frames, report.delayCs);
+  const r=await json(path.join(out,'validation.json'));assert(r.version===2,'Expected v2 report');assert(r.frames===r.sourceFrames,'Output expanded sparse source frames');
+  const master=Math.max(...r.sizes),poses=[];for(let i=0;i<r.frames;i++){
+    const p=await readRGBA(path.join(out,'pose-only',frameName(i)));assert(p.width===master&&p.height===master,'Neutral pose dimensions changed');poses.push(p.data);
+    assert(r.records[i].sourceFrame===i,'Source order or one-frame-per-pose invariant violated');
   }
-  return { automatedPass: true, visualReview: report.visualReview, reviewFlags: report.reviewFlags };
+  const d=sequenceDiagnostics(poses);assert(d.duplicates.length===0,'Repeated neutral rotation pose');assert(d.digest===r.rotationDigest,'Neutral rotation changed');
+  for(const size of r.sizes){
+    const dir=path.join(out,`frames-${size}`),frames=[];assert((await fs.readdir(dir)).filter(n=>/^frame-\d{4}\.png$/.test(n)).length===r.frames,'Unexpected PNG frame count');
+    for(let i=0;i<r.frames;i++){const p=await readRGBA(path.join(dir,frameName(i)));assert(p.width===size&&p.height===size,'PNG dimensions differ');checkInside(p.data,size,`Frame ${i}`);for(let k=3;k<p.data.length;k+=4)assert(p.data[k]===0||p.data[k]===255,'Pixel export contains soft alpha');frames.push(p.data);}
+    assert(paletteCount(frames)<=r.paletteColours,'Pixel sequence uses more colours than its shared palette');
+    await inspectGIF(path.join(out,`spin-${size}.gif`),dir,size,r.frames,r.delayCs);
+  }
+  return {automatedPass:true,visualReview:r.visualReview,neutralRotationReview:r.neutralRotationReview.status,frames:r.frames,sizes:r.sizes};
 }
 
-async function main() {
-  const [cmd, a, b, extra] = process.argv.slice(2);
-  if (cmd === 'prepare' && a && b) { const c = await prepare(path.resolve(a), path.resolve(b)); console.log(JSON.stringify({ prepared: path.resolve(b), poses: c.keyframes.length, masterSize: c.masterSize })); }
-  else if (cmd === 'render' && a && b) { const r = await render(path.resolve(a), path.resolve(b), extra && path.resolve(extra)); console.log(JSON.stringify({ output: path.resolve(b), gifs: r.gifs, reviewFlags: r.reviewFlags, visualReview: r.visualReview })); }
-  else if (cmd === 'validate' && a) console.log(JSON.stringify(await validate(path.resolve(a))));
-  else { console.log('Usage:\n  node scripts/spin.mjs prepare CONFIG.json NEW_PREPARED_DIR\n  node scripts/spin.mjs render PREPARED_DIR NEW_OUTPUT_DIR [TRANSITIONS.json]\n  node scripts/spin.mjs validate OUTPUT_DIR\n\nRequires Node >=22, npm ci, and FFmpeg on PATH. Outputs must not already exist.'); if (cmd && cmd !== '--help') process.exitCode = 1; }
+async function main(){
+  const [cmd,a,b,extra]=process.argv.slice(2);
+  if(cmd==='prepare'&&a&&b){const c=await prepare(path.resolve(a),path.resolve(b));console.log(JSON.stringify({prepared:path.resolve(b),frames:c.frames,size:c.masterSize,next:'Inspect rotation-only GIF, then copy and complete rotation-review.template.json as rotation-review.json'}));}
+  else if(cmd==='render'&&a&&b){const r=await render(path.resolve(a),path.resolve(b),extra&&path.resolve(extra));console.log(JSON.stringify({output:path.resolve(b),gifs:r.gifs,visualReview:r.visualReview}));}
+  else if(cmd==='validate'&&a)console.log(JSON.stringify(await validate(path.resolve(a))));
+  else{console.log('Pixel direct-sequence workflow v2:\n  node scripts/spin.mjs prepare CONFIG.json NEW_PREPARED_DIR\n  node scripts/spin.mjs render PREPARED_DIR NEW_OUTPUT_DIR [ROTATION_REVIEW.json]\n  node scripts/spin.mjs validate OUTPUT_DIR\nRequires Node >=22, npm ci, FFmpeg. Default 144px. Provide >=24 unique neutral rotation frames; no temporal interpolation.');if(cmd&&cmd!=='--help')process.exitCode=1;}
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) main().catch(e => { console.error(e.message); process.exitCode = 1; });
+if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href)main().catch(e=>{console.error(e.message);process.exitCode=1;});

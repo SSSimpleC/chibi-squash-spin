@@ -13,8 +13,9 @@ export function run(command, args) {
   });
 }
 
-export async function encodeGIF(dir, output, count, delayCs) {
-  await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-n', '-framerate', `${100}/${delayCs}`, '-start_number', '0', '-i', path.join(dir, 'frame-%04d.png'), '-filter_complex', '[0:v]split[a][b];[a]palettegen=reserve_transparent=1:stats_mode=full[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:alpha_threshold=128', '-frames:v', String(count), '-loop', '0', '-gifflags', '0', output]);
+export async function encodeGIF(dir, output, count, delayCs, pixel = false) {
+  const dither = pixel ? 'none' : 'bayer:bayer_scale=3';
+  await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-n', '-framerate', `${100}/${delayCs}`, '-start_number', '0', '-i', path.join(dir, 'frame-%04d.png'), '-filter_complex', `[0:v]split[a][b];[a]palettegen=reserve_transparent=1:stats_mode=full[p];[b][p]paletteuse=dither=${dither}:alpha_threshold=128`, '-frames:v', String(count), '-loop', '0', '-gifflags', '0', output]);
 }
 
 export async function inspectGIF(file, dir, size, count, delayCs) {

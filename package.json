@@ -1,8 +1,8 @@
 {
   "name": "chibi-squash-spin",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "《朋友的酒（DJ版）》欧耶耶！开心比什么都贵——角色Q版坐姿弹转梗图 GIF / seated chibi spinning meme skill for Codex.",
+  "description": "《朋友的酒（DJ版）》欧耶耶像素旋转梗：144px二头身坐姿，先直接绘制完整旋转序列、验收后再施加Q弹。Codex pixel chibi spin skill.",
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": { "test": "node --test tests/*.test.mjs" },

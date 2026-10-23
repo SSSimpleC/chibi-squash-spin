@@ -1,16 +1,15 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 
 export const assert = (ok, message) => { if (!ok) throw new Error(message); };
 export const json = async file => JSON.parse(await fs.readFile(file, 'utf8'));
 export const saveJSON = (file, value) => fs.writeFile(file, JSON.stringify(value, null, 2) + '\n');
 export const frameName = i => `frame-${String(i).padStart(4, '0')}.png`;
-
-export async function newDirectory(dir) {
-  // Refuse overwriting an existing deliverable, including an empty directory.
-  await fs.mkdir(dir, { recursive: false });
-}
+export const hash = data => createHash('sha256').update(data).digest('hex');
+export const newDirectory = dir => fs.mkdir(dir, { recursive: false });
+export const REVIEW_CHECKS = ['twoHeadChibi', 'shortTuckedFeet', 'armsAtSides', 'referenceExpression', 'stableIdentityAndCostume', 'neutralHeightBeforeSquash', 'everyFrameAdvances', 'frontSideBackCoverage', 'seamContinuous', 'pixelArtStyle'];
 
 export function bounds(data, width, height, threshold = 0) {
   let x0 = width, x1 = -1, y0 = height, y1 = -1, area = 0;
@@ -21,82 +20,78 @@ export function bounds(data, width, height, threshold = 0) {
   assert(x1 >= x0 && y1 >= y0, 'Empty transparent frame');
   return { x0, x1, y0, y1, width: x1 - x0 + 1, height: y1 - y0 + 1, area };
 }
-
 export async function readRGBA(file) {
   const { data, info } = await sharp(file).toColourspace('srgb').ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  assert(info.channels === 4, 'Expected RGBA input');
   return { data, width: info.width, height: info.height };
 }
-
-export function sample(data, width, height, x, y, out) {
-  out.fill(0);
-  const x0 = Math.floor(x), y0 = Math.floor(y), tx = x - x0, ty = y - y0;
-  for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
-    const xx = x0 + dx, yy = y0 + dy;
-    if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
-    const w = (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty), p = (yy * width + xx) * 4, a = data[p + 3] / 255;
-    out[3] += a * w;
-    for (let c = 0; c < 3; c++) out[c] += data[p + c] * a * w;
+export function binaryAlpha(data) {
+  const out = Buffer.from(data);
+  for (let p = 0; p < out.length; p += 4) {
+    if (out[p + 3] < 128) out.fill(0, p, p + 4); else out[p + 3] = 255;
   }
   return out;
 }
-
-export function transform(data, width, height, size, ax, ay, sx, sy, destX, destY) {
-  const out = Buffer.alloc(size * size * 4), v = new Float64Array(4);
-  // Pixel-centre mapping around one fixed, continuous-coordinate anchor.
+export function nearestTransform(data, width, height, size, ax, ay, sx, sy, destX, destY) {
+  const out = Buffer.alloc(size * size * 4);
   for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    sample(data, width, height, (x + .5 - destX) / sx + ax - .5, (y + .5 - destY) / sy + ay - .5, v);
-    const p = (y * size + x) * 4; out[p + 3] = Math.round(v[3] * 255);
-    if (v[3] > 0) for (let c = 0; c < 3; c++) out[p + c] = Math.round(v[c] / v[3]);
+    const xx = Math.floor((x + .5 - destX) / sx + ax), yy = Math.floor((y + .5 - destY) / sy + ay);
+    if (xx >= 0 && yy >= 0 && xx < width && yy < height) data.copy(out, (y * size + x) * 4, (yy * width + xx) * 4, (yy * width + xx + 1) * 4);
   }
   return out;
 }
-
 export function difference(a, b) {
-  assert(a.length === b.length, 'Difference requires matching dimensions');
-  let sum = 0;
+  assert(a.length === b.length, 'Difference needs equal canvases'); let sum = 0;
   for (let p = 0; p < a.length; p += 4) {
     for (let c = 0; c < 3; c++) sum += Math.abs(a[p + c] * a[p + 3] / 255 - b[p + c] * b[p + 3] / 255);
     sum += Math.abs(a[p + 3] - b[p + 3]);
   }
   return sum / a.length;
 }
+export const writePNG = (file, data, size) => sharp(data, { raw: { width: size, height: size, channels: 4 } }).png().toFile(file);
 
-export async function writePNG(file, data, size) {
-  await sharp(data, { raw: { width: size, height: size, channels: 4 } }).png().toFile(file);
+export async function sharedPalette(frames, size, colours) {
+  const stack = Buffer.concat(frames);
+  const png = await sharp(stack, { raw: { width: size, height: size * frames.length, channels: 4 } }).png({ palette: true, colours, dither: 0, effort: 10 }).toBuffer();
+  const raw = await sharp(png).ensureAlpha().raw().toBuffer();
+  return frames.map((_, i) => binaryAlpha(raw.subarray(i * size * size * 4, (i + 1) * size * size * 4)));
+}
+export function paletteCount(frames) {
+  const colours = new Set();
+  for (const frame of frames) for (let p = 0; p < frame.length; p += 4) if (frame[p + 3]) colours.add(frame.readUInt32BE(p));
+  return colours.size;
+}
+export function sequenceDiagnostics(frames) {
+  const hashes = frames.map(hash), duplicates = [];
+  for (let i = 0; i < hashes.length; i++) { const earlier = hashes.indexOf(hashes[i]); if (earlier < i) duplicates.push({ earlier, repeated: i }); }
+  const differences = frames.map((f, i) => difference(f, frames[(i + 1) % frames.length]));
+  const sorted = [...differences].sort((a, b) => a - b), median = sorted[Math.floor(sorted.length / 2)];
+  const flags = differences.flatMap((d, i) => d < .03 || d > Math.max(.15, median * 2.5) ? [{ from: i, to: (i + 1) % frames.length, difference: d, reason: d < .03 ? 'near-hold' : 'large-step' }] : []);
+  return { hashes, digest: hash(hashes.join('\n')), duplicates, differences, flags, note: 'Image difference detects suspect intervals, not actual yaw angle or identity consistency; visual rotation review is required.' };
 }
 
 export async function loadConfig(file) {
   const c = await json(file), base = path.dirname(path.resolve(file));
-  c.sizes ??= [256, 512]; c.frames ??= 60; c.durationSeconds ??= 2.4;
-  c.margin ??= .05; c.squashMin ??= 2 / 3; c.bounces ??= 2;
-  assert(Array.isArray(c.sizes) && c.sizes.length > 0 && c.sizes.every(x => Number.isInteger(x) && x >= 16 && x <= 2048), 'sizes: integer pixels, 16..2048');
-  c.sizes = [...new Set(c.sizes)].sort((a, b) => a - b); c.masterSize = Math.max(...c.sizes);
-  assert(Number.isInteger(c.frames) && c.frames >= 4 && c.frames <= 240, 'frames: integer 4..240');
-  assert(Number.isFinite(c.durationSeconds) && c.durationSeconds > 0, 'durationSeconds must be positive');
-  c.delayCs = Math.round(c.durationSeconds * 100 / c.frames);
-  assert(c.delayCs >= 2 && Math.abs(c.delayCs * c.frames / 100 - c.durationSeconds) < 1e-6, 'GIF timing must be an exact multiple of 10 ms per frame, at least 20 ms');
+  c.style ??= 'pixel'; c.sizes ??= [144]; c.margin ??= .045; c.squashMin ??= 2 / 3; c.bounces ??= 2; c.paletteColours ??= 48;
+  assert(c.style === 'pixel', 'v2 is a pixel-art direct-sequence workflow; do not reuse the v1 morph pipeline');
+  assert(!c.transitions?.length, 'v2 does not accept morph transitions: generate a complete neutral rotation sequence');
+  assert(Array.isArray(c.sizes) && c.sizes.length > 0 && c.sizes.every(s => Number.isInteger(s) && s >= 32 && s <= 512), 'sizes: integer 32..512; default [144]');
+  c.sizes = [...new Set(c.sizes)].sort((a,b) => a-b); c.masterSize = Math.max(...c.sizes);
+  assert(Array.isArray(c.keyframes) && c.keyframes.length >= 24 && c.keyframes.length <= 96, 'Provide 24..96 directly drawn neutral rotation frames; a few directions cannot be repeated into an animation');
+  assert(c.frames === undefined || c.frames === c.keyframes.length, 'Output frame count must equal source rotation frame count; no repeated directions or interpolated holds');
+  c.frames = c.keyframes.length;
+  c.durationSeconds ??= c.frames * .08; c.delayCs = Math.round(c.durationSeconds * 100 / c.frames);
+  assert(Number.isFinite(c.durationSeconds) && c.delayCs >= 2 && Math.abs(c.delayCs * c.frames / 100 - c.durationSeconds) < 1e-6, 'Use an exact GIF delay of at least 20ms per frame; omit durationSeconds for 80ms/frame');
   assert(Number.isFinite(c.margin) && c.margin >= .02 && c.margin <= .2, 'margin: .02.. .2');
-  assert(Number.isFinite(c.squashMin) && c.squashMin >= .4 && c.squashMin <= 1, 'squashMin: .4..1');
+  assert(Number.isFinite(c.squashMin) && c.squashMin >= .5 && c.squashMin <= 1, 'squashMin: .5..1');
   assert(Number.isInteger(c.bounces) && c.bounces >= 0 && c.bounces <= 8, 'bounces: integer 0..8');
-  assert(Array.isArray(c.keyframes) && c.keyframes.length >= 2, 'Provide at least two inspected keyframes');
-  const seen = new Set();
-  for (const k of c.keyframes) {
-    assert(Number.isFinite(k.angle) && k.angle >= 0 && k.angle < 360 && !seen.has(k.angle), 'Angles must be unique, 0 <= angle < 360 (do not duplicate 360)');
-    seen.add(k.angle); assert(typeof k.file === 'string', 'Each keyframe needs a file');
-    k.file = path.resolve(base, k.file);
-    assert(Array.isArray(k.anchor) && k.anchor.length === 2 && k.anchor.every(v => Number.isFinite(v) && v >= 0 && v <= 1), 'anchor is normalized [axisX, seatedBaselineY] within the cropped image');
-    if (k.crop) assert(['left', 'top', 'width', 'height'].every(n => Number.isInteger(k.crop[n]) && k.crop[n] >= (['width', 'height'].includes(n) ? 1 : 0)), 'crop must use nonnegative pixel origin and positive integer dimensions');
+  assert(Number.isInteger(c.paletteColours) && c.paletteColours >= 8 && c.paletteColours <= 128, 'paletteColours: integer 8..128');
+  c.keyframes.sort((a,b) => a.angle-b.angle);
+  for (let i = 0; i < c.frames; i++) {
+    const k = c.keyframes[i];
+    assert(Number.isFinite(k.angle) && Math.abs(k.angle - i * 360 / c.frames) < .001, 'Source angles must cover 0..360 uniformly, excluding duplicate 360; angle labels still require visual verification');
+    assert(typeof k.file === 'string', 'Each source frame needs file'); k.file = path.resolve(base, k.file);
+    assert(Array.isArray(k.anchor) && k.anchor.length === 2 && k.anchor.every(v => Number.isFinite(v) && v >= 0 && v <= 1), 'anchor: normalized [head/torso axis x, seated contact y] in the crop');
+    if (k.crop) assert(['left','top','width','height'].every(n => Number.isInteger(k.crop[n]) && k.crop[n] >= (['width','height'].includes(n) ? 1 : 0)), 'Invalid pixel crop');
   }
-  c.keyframes.sort((a, b) => a.angle - b.angle);
-  assert(c.keyframes[0].angle === 0, 'Include an angle-0 front pose');
-  c.transitions ??= [];
   return c;
-}
-
-export function interval(keys, angle) {
-  let i = keys.length - 1;
-  for (let j = 0; j < keys.length - 1; j++) if (angle >= keys[j].angle && angle < keys[j + 1].angle) { i = j; break; }
-  const j = (i + 1) % keys.length, end = j === 0 ? 360 : keys[j].angle;
-  return { i, j, t: (angle - keys[i].angle) / (end - keys[i].angle) };
 }
